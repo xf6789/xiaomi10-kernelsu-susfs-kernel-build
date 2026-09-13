@@ -1,0 +1,281 @@
+name: Build APTKernel cmi ReSukiSU 35061
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: cmi MIUI - APTKernel 4.19.325 - ReSukiSU 35061
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: 1. Checkout exact APTKernel source
+        uses: actions/checkout@v6
+        with:
+          repository: Kamilek655/android_kernel_xiaomi_sm8250_kamilek655
+          ref: v20260620-c07b3045
+          fetch-depth: 1
+
+      - name: 2. Verify APTKernel source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "===== APTKernel source ====="
+          git log -1 --oneline
+          git rev-parse HEAD
+
+          echo "===== Kernel version ====="
+          grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL) =' Makefile | head -3
+
+          SHORT_SHA="$(git rev-parse --short=8 HEAD)"
+
+          if [ "$SHORT_SHA" != "c07b3045" ]; then
+            echo "ERROR: expected APTKernel c07b3045, got $SHORT_SHA"
+            exit 1
+          fi
+
+      - name: 3. Cleanup runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+
+      - name: 4. Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            git \
+            curl \
+            wget \
+            bison \
+            flex \
+            zip \
+            unzip \
+            bc \
+            cpio \
+            libssl-dev \
+            libelf-dev \
+            ccache \
+            python-is-python3
+
+      - name: 5. Setup ccache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ccache_mikernel
+          key: aptkernel-cmi-resukisu-35061-${{ github.run_id }}
+          restore-keys: |
+            aptkernel-cmi-resukisu-35061-
+            aptkernel-cmi-
+
+      - name: 6. Setup ZyC Clang 16
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$HOME/zyc-clang"
+          cd "$HOME/zyc-clang"
+
+          wget -q \
+            https://github.com/ZyCromerZ/Clang/releases/download/16.0.6-20260510-release/Clang-16.0.6-20260510.tar.gz
+
+          tar -zxf Clang-16.0.6-20260510.tar.gz
+
+          echo "===== Clang version ====="
+          "$HOME/zyc-clang/bin/clang" --version
+
+      - name: 7. Pin ReSukiSU and build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("build.sh")
+          s = p.read_text()
+
+          replacements = {
+              'curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash':
+              'curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/v4.2.0-rc1/kernel/setup.sh" | bash -s -- v4.2.0-rc1',
+
+              'curl -LSs "https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh" | bash':
+              'git clone https://github.com/vc-teahouse/Baseband-guard Baseband-guard && git -C Baseband-guard checkout cef0daaef94d46022e1f8883ba7a30dfab849dbe && sh Baseband-guard/setup.sh cef0daaef94d46022e1f8883ba7a30dfab849dbe',
+              'git clone https://github.com/AstideLabs/AnyKernel3 -b master --single-branch --depth=1 anykernel':
+              'git clone https://github.com/AstideLabs/AnyKernel3 -b master --single-branch anykernel && git -C anykernel checkout 332c0e860d3a27ad7c746ba813b9fb09afcc0684',
+          }
+
+          for old, new in replacements.items():
+              count = s.count(old)
+
+              if count != 1:
+                  raise SystemExit(
+                      f"ERROR: expected exactly one match, found {count}: {old}"
+                  )
+
+              s = s.replace(old, new)
+
+          p.write_text(s)
+          PY
+
+          echo "===== ReSukiSU setup ====="
+          grep -n "ReSukiSU.*setup.sh" build.sh
+
+          echo "===== Baseband-guard setup ====="
+          grep -n "Baseband-guard.*setup.sh" build.sh
+
+          echo "===== AnyKernel3 setup ====="
+          grep -n "AstideLabs/AnyKernel3" build.sh
+
+      - name: 8. Build APTKernel cmi with ReSukiSU
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          chmod +x build.sh
+
+          echo "===== Start cmi KSU build ====="
+          bash build.sh cmi ksu
+
+      - name: 9. Verify ReSukiSU 35061 and UAPI 2
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -d KernelSU/.git ]; then
+            echo "ERROR: ReSukiSU repository not found"
+            exit 1
+          fi
+
+          TAG="$(git -C KernelSU describe --tags --exact-match 2>/dev/null || true)"
+          SHA="$(git -C KernelSU rev-parse HEAD)"
+          COUNT="$(git -C KernelSU rev-list --count HEAD)"
+          KSU_VERSION="$((30000 + COUNT + 700))"
+
+          UAPI="$(
+            awk '
+              /KERNEL_SU_UAPI_VERSION =/ {
+                gsub(/;/, "", $NF)
+                print $NF
+              }
+            ' KernelSU/uapi/supercall.h
+          )"
+
+          echo "================================="
+          echo "ReSukiSU tag:     $TAG"
+          echo "ReSukiSU commit:  $SHA"
+          echo "Commit count:     $COUNT"
+          echo "KSU version:      $KSU_VERSION"
+          echo "UAPI version:     $UAPI"
+          echo "================================="
+
+          if [ "$TAG" != "v4.2.0-rc1" ]; then
+            echo "ERROR: expected v4.2.0-rc1"
+            exit 1
+          fi
+
+          if [ "$KSU_VERSION" != "35061" ]; then
+            echo "ERROR: expected 35061, got $KSU_VERSION"
+            exit 1
+          fi
+
+          if [ "$UAPI" != "2" ]; then
+            echo "ERROR: expected UAPI 2, got $UAPI"
+            exit 1
+          fi
+
+          echo "ReSukiSU verification PASSED"
+
+      - name: 10. Locate MIUI cmi package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "===== Generated ZIP files ====="
+          ls -lh ./*.zip
+
+          MIUI_ZIP="$(
+            find . -maxdepth 1 -type f \
+              -name 'APTKernel_MIUI_cmi_ReSukiSU-SuSFS_*.zip' \
+              | head -n 1
+          )"
+
+          if [ -z "$MIUI_ZIP" ]; then
+            echo "ERROR: MIUI cmi ReSukiSU-SuSFS ZIP not found"
+            exit 1
+          fi
+
+          echo "MIUI_ZIP=$MIUI_ZIP"
+
+          sha256sum "$MIUI_ZIP" \
+            | tee APTKernel_MIUI_cmi_ReSukiSU-35061.sha256.txt
+
+      - name: 11. Verify AnyKernel3 flashing behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          MIUI_ZIP="$(
+            find . -maxdepth 1 -type f \
+              -name 'APTKernel_MIUI_cmi_ReSukiSU-SuSFS_*.zip' \
+              | head -n 1
+          )"
+
+          echo "===== AnyKernel3 important lines ====="
+
+          unzip -p "$MIUI_ZIP" anykernel.sh \
+            | grep -E 'BLOCK=|flash_boot|flash_dtbo|dtbo.img' \
+            || true
+
+          if ! unzip -p "$MIUI_ZIP" anykernel.sh \
+            | grep -Eq '^[[:space:]]*BLOCK=boot;'; then
+            echo "ERROR: BLOCK is not boot"
+            exit 1
+          fi
+
+          if ! unzip -p "$MIUI_ZIP" anykernel.sh \
+            | grep -Eq '^[[:space:]]*flash_boot;'; then
+            echo "ERROR: flash_boot is not enabled"
+            exit 1
+          fi
+
+          if unzip -p "$MIUI_ZIP" anykernel.sh \
+            | grep -Eq '^[[:space:]]*flash_dtbo;'; then
+            echo "ERROR: flash_dtbo is ACTIVE"
+            exit 1
+          fi
+
+          echo "================================="
+          echo "AnyKernel3 verification PASSED"
+          echo "boot flashing: YES"
+          echo "dtbo flashing: NO"
+          echo "================================="
+
+      - name: 12. Final build information
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=========================================="
+          echo " APTKernel cmi ReSukiSU build completed"
+          echo "=========================================="
+
+          ls -lh APTKernel_MIUI_cmi_ReSukiSU-SuSFS_*.zip
+
+          echo
+          echo "===== SHA256 ====="
+          cat APTKernel_MIUI_cmi_ReSukiSU-35061.sha256.txt
+
+      - name: 13. Upload MIUI cmi artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: APTKernel-MIUI-cmi-ReSukiSU-35061
+          path: |
+            APTKernel_MIUI_cmi_ReSukiSU-SuSFS_*.zip
+            APTKernel_MIUI_cmi_ReSukiSU-35061.sha256.txt
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
