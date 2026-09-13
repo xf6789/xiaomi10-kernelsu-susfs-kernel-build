@@ -103,7 +103,7 @@ jobs:
               'curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/v4.2.0-rc1/kernel/setup.sh" | bash -s -- v4.2.0-rc1',
 
               'curl -LSs "https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh" | bash':
-              'git clone https://github.com/vc-teahouse/Baseband-guard Baseband-guard && git -C Baseband-guard checkout cef0daaef94d46022e1f8883ba7a30dfab849dbe && sh Baseband-guard/setup.sh cef0daaef94d46022e1f8883ba7a30dfab849dbe',
+              'git clone https://github.com/vc-teahouse/Baseband-guard Baseband-guard && git -C Baseband-guard checkout cef0daaef94d46022e1f8883ba7a30dfab849dbe && bash Baseband-guard/setup.sh cef0daaef94d46022e1f8883ba7a30dfab849dbe',
               'git clone https://github.com/AstideLabs/AnyKernel3 -b master --single-branch --depth=1 anykernel':
               'git clone https://github.com/AstideLabs/AnyKernel3 -b master --single-branch anykernel && git -C anykernel checkout 332c0e860d3a27ad7c746ba813b9fb09afcc0684',
           }
